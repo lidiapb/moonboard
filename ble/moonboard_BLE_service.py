@@ -8,6 +8,8 @@ import string,json
 import subprocess
 import logging
 from moonboard_app_protocol import UnstuffSequence, decode_problem_string
+from queue import Queue
+from threading import Thread
  
 BLUEZ_SERVICE_NAME =           'org.bluez'
 DBUS_OM_IFACE =                'org.freedesktop.DBus.ObjectManager'
@@ -21,53 +23,21 @@ LOCAL_NAME =                   'Moonboard A'
 SERVICE_NAME=                  'com.moonboard'
 mainloop = None
 
-class TxCharacteristic(Characteristic):
-    def __init__(self, bus, index, service):
-        Characteristic.__init__(self, bus, index, UART_TX_CHARACTERISTIC_UUID,
-                                ['notify'], service)
-        self.notifying = False
-        GLib.io_add_watch(sys.stdin, GLib.IO_IN, self.on_console_input)
- 
-    def on_console_input(self, fd, condition):
-        s = fd.readline()
-        if s.isspace():
-            pass
-        else:
-            self.send_tx(s)
-        return True
- 
-    def send_tx(self, s):
-        if not self.notifying:
-            return
-        value = []
-        for c in s:
-            value.append(dbus.Byte(c.encode()))
-        self.PropertiesChanged(GATT_CHRC_IFACE, {'Value': value}, [])
- 
-    def StartNotify(self):
-        if self.notifying:
-            return
-        self.notifying = True
- 
-    def StopNotify(self):
-        if not self.notifying:
-            return
-        self.notifying = False
- 
 class RxCharacteristic(Characteristic):
-    def __init__(self, bus, index, service, process_rx):
+    def __init__(self, bus, index, service, queue):
         Characteristic.__init__(self, bus, index, UART_RX_CHARACTERISTIC_UUID,
                                 ['write'], service)
-        self.process_rx=process_rx
+        self.queue = queue
 
     def WriteValue(self, value, options):
-        self.process_rx(value)
+        #self.logger.info('RxChar: '+str(value))
+        #self.process_rx(value)
+        self.queue.put(value) 
 
 class UartService(Service):
-    def __init__(self, bus,path, index, process_rx):
+    def __init__(self, bus,path, index, queue):
         Service.__init__(self, bus,path, index, UART_SERVICE_UUID, True)
-        #self.add_characteristic(TxCharacteristic(bus, 0, self))
-        self.add_characteristic(RxCharacteristic(bus, 1, self, process_rx))
+        self.add_characteristic(RxCharacteristic(bus, 1, self, queue))
  
 class MoonApplication(dbus.service.Object):
     IFACE = "com.moonboard.method"
@@ -77,15 +47,23 @@ class MoonApplication(dbus.service.Object):
         self.logger=logger
         self.socket=socket
         self.unstuffer= UnstuffSequence(self.logger)
-        dbus.service.Object.__init__(self, bus, self.path)
-        self.add_service(UartService(bus,self.get_path(), 0, self.process_rx))
+        self.queue = Queue()
+        self.worker = Thread(target=self.process_rx, args=(self.queue,))
+        self.worker.start()
 
-    def process_rx(self,ba):
-        new_problem_string= self.unstuffer.process_bytes(ba)
-        if new_problem_string is not None:
-            problem= decode_problem_string(new_problem_string)
-            self.new_problem(json.dumps(problem))
-            start_adv(self.logger)
+        dbus.service.Object.__init__(self, bus, self.path)
+        self.add_service(UartService(bus,self.get_path(), 0, self.queue))
+
+    def process_rx(self, queue):
+        while True:
+            self.logger.info('Waiting in thread...')
+            ba = queue.get()
+            new_problem_string= self.unstuffer.process_bytes(ba)
+            if new_problem_string is not None:
+                problem= decode_problem_string(new_problem_string)
+                self.new_problem(json.dumps(problem))
+                #start_adv(self.logger)
+            queue.task_done()
 
     @dbus.service.signal(dbus_interface="com.moonboard",
                             signature="s")
