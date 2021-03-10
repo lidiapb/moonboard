@@ -30,8 +30,6 @@ class RxCharacteristic(Characteristic):
         self.queue = queue
 
     def WriteValue(self, value, options):
-        #self.logger.info('RxChar: '+str(value))
-        #self.process_rx(value)
         self.queue.put(value) 
 
 class UartService(Service):
@@ -48,22 +46,23 @@ class MoonApplication(dbus.service.Object):
         self.socket=socket
         self.unstuffer= UnstuffSequence(self.logger)
         self.queue = Queue()
-        self.worker = Thread(target=self.process_rx, args=(self.queue,))
+        self.worker = Thread(target=self.process_rx, args=())
+        self.worker.setDaemon(True)
         self.worker.start()
 
         dbus.service.Object.__init__(self, bus, self.path)
         self.add_service(UartService(bus,self.get_path(), 0, self.queue))
 
-    def process_rx(self, queue):
+    def process_rx(self):
         while True:
             self.logger.info('Waiting in thread...')
-            ba = queue.get()
+            ba = self.queue.get()
             new_problem_string= self.unstuffer.process_bytes(ba)
             if new_problem_string is not None:
                 problem= decode_problem_string(new_problem_string)
                 self.new_problem(json.dumps(problem))
-                #start_adv(self.logger)
-            queue.task_done()
+                start_adv(self.logger)
+            self.queue.task_done()
 
     @dbus.service.signal(dbus_interface="com.moonboard",
                             signature="s")
