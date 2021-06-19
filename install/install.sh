@@ -26,6 +26,8 @@ pip3 install -r install/requirements.txt
 sudo pip3 install -r install/requirements.txt 
 # pip3 uninstall -y -r install/requirements.txt # uninstall
 
+echo "Applying patch to bluez for iPhone"
+sudo sed -i '/ExecStart/ c ExecStart=/usr/lib/bluetooth/bluetoothd -P battery' /usr/lib/systemd/system/bluetooth.service
 
 echo "Install service" # FIXME
 cd /home/pi/moonboard/services
